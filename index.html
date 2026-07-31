@@ -309,33 +309,26 @@
     </div>
     <div class="head-tools">
       <button class="theme-toggle" id="themeToggle" aria-label="Toggle colour theme">☀️ Light</button>
-      <div class="pulse-badge"><span class="pulse-dot" id="pulseDot"></span><span id="pulseText">Not connected</span></div>
+      <div class="pulse-badge" id="pulseBadge"><span class="pulse-dot" id="pulseDot"></span><span id="pulseText">Not connected</span></div>
     </div>
   </div>
 
-  <div class="source-panel">
-    <div class="source-row">
-      <input type="text" id="csvUrl" placeholder="Paste the published CSV link (File → Share → Publish to web → CSV) …">
-      <button class="primary" id="connectBtn">Connect</button>
-      <button class="ghost" id="refreshBtn">Refresh</button>
-      <label class="autorefresh"><input type="checkbox" id="autoRefresh"> auto-refresh 60s</label>
-    </div>
-    <div class="source-meta">
-      <span class="source-status" id="sourceStatus">No data loaded yet.</span>
-      <span>
-        <button class="link-btn" id="howtoToggle">how do I get this link?</button>
-        &nbsp;·&nbsp;
-        <button class="link-btn" id="pasteToggle">paste CSV instead</button>
+  <div class="source-panel" id="sourcePanel">
+    <div class="source-row" style="justify-content:space-between;align-items:center;">
+      <span class="source-status" id="sourceStatus">Loading data…</span>
+      <span style="display:flex;gap:12px;align-items:center;">
+        <button class="ghost" id="refreshBtn">Refresh</button>
+        <label class="autorefresh"><input type="checkbox" id="autoRefresh"> auto-refresh 60s</label>
       </span>
     </div>
-    <div class="howto" id="howto">
-      In Google Sheets: <code>File → Share → Publish to web</code>. Choose the specific sheet/tab, set the format dropdown to <code>Comma-separated values (.csv)</code>, click <code>Publish</code>, then copy that link here. Any time you edit the sheet, refreshing (or auto-refresh) pulls the latest rows — no need to republish.
-      If your network blocks the fetch (CORS), use "paste CSV instead": open the published link, select all, copy, and paste it in.
-      <br><br>Expected columns: <code>Main Module</code>, <code>Project Title</code>, <code>Developer</code>, <code>Current Stage</code>, <code>Stage</code>, <code>Estimated Start Date</code>, <code>Estimated End Date</code>, <code>Actual Start Date</code>, <code>Actual End Date</code>, <code>Blocker</code>, <code>Remarks</code>.
-    </div>
-    <div class="paste-area" id="pasteArea">
-      <textarea id="pasteText" placeholder="Paste raw CSV text here…"></textarea>
-      <div style="margin-top:8px;"><button class="primary" id="loadPasted">Load pasted data</button></div>
+    <!-- backend source config: link is hardcoded in the script, hidden from viewers -->
+    <div style="display:none;">
+      <input type="text" id="csvUrl">
+      <button id="connectBtn"></button>
+      <button id="pasteToggle"></button>
+      <button id="howtoToggle"></button>
+      <div id="howto"></div>
+      <div id="pasteArea"><textarea id="pasteText"></textarea><button id="loadPasted"></button></div>
     </div>
   </div>
 
@@ -493,19 +486,22 @@ function setStatus(text, kind){
 }
 async function connect(){
   const url = el('csvUrl').value.trim();
-  if(!url){ setStatus('Paste a published CSV link first.','err'); return; }
+  if(!url){ setStatus('No source configured.','err'); return; }
   setStatus('Syncing…');
-  try{
-    const bust = url + (url.includes('?')?'&':'?') + 'cb=' + Date.now();
-    const res = await fetch(bust, {cache:'no-store'});
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const text = await res.text();
-    ingest(text);
-    renderAll();
-    setStatus(PROJECTS.length+' project(s), '+ROWS.length+' stage rows loaded.', 'live');
-  }catch(e){
-    setStatus('Could not fetch that link ('+e.message+'). Try "paste CSV instead" below.', 'err');
+  const tries = [ url + (url.includes('?')?'&':'?') + 'cb=' + Date.now(), url ];
+  let lastErr;
+  for(const u of tries){
+    try{
+      const res = await fetch(u, {cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const text = await res.text();
+      ingest(text);
+      renderAll();
+      setStatus(PROJECTS.length+' project(s) · '+ROWS.length+' stage rows · synced '+new Date().toLocaleTimeString(), 'live');
+      return;
+    }catch(e){ lastErr = e; }
   }
+  setStatus('Could not load the sheet ('+lastErr.message+'). This works when the page is hosted over https (e.g. GitHub Pages); opening the file directly on your computer is blocked by the browser.', 'err');
 }
 function loadPasted(){
   const text = el('pasteText').value;
@@ -527,6 +523,24 @@ el('autoRefresh').onchange = (e)=>{
   if(autoTimer){ clearInterval(autoTimer); autoTimer=null; }
   if(e.target.checked){ autoTimer = setInterval(()=>{ if(el('csvUrl').value.trim()) connect(); }, 60000); }
 };
+
+// ---------- auto-connect to the published sheet (link hardcoded; no paste step) ----------
+const DEFAULT_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTxpaGIlmMndzpr6lWY9IWTApHEtHabpsNZyiGYNKSKgbwmLoRFSmyE3mAwQSVU6zQy973PjP_f7Pby/pub?output=csv';
+if(DEFAULT_CSV){
+  el('csvUrl').value = DEFAULT_CSV;                              // hardcoded source (kept hidden)
+  ['csvUrl','connectBtn'].forEach(id=>{ const n=el(id); if(n) n.style.display='none'; });
+  const meta = document.querySelector('#sourcePanel .source-meta'); if(meta) meta.style.display='none';
+  const howto = el('howto'); if(howto) howto.style.display='none';
+  const pasteArea = el('pasteArea'); if(pasteArea) pasteArea.style.display='none';
+  const badge = el('pulseBadge');
+  badge.style.cursor = 'pointer';
+  badge.title = 'Click to refresh';
+  badge.onclick = ()=> connect();
+  el('autoRefresh').checked = true;
+  connect();                                   // load + render immediately
+  if(autoTimer){ clearInterval(autoTimer); }
+  autoTimer = setInterval(()=> connect(), 60000);  // keep it fresh
+}
 
 // ---------- tabs ----------
 document.querySelectorAll('.tab').forEach(btn=>{
